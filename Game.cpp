@@ -94,6 +94,7 @@ Player *Game::spawn_player() {
 	player.color = glm::normalize(player.color);
 
 	player.name = "Player " + std::to_string(next_player_number++);
+	player.id = next_player_number;
 
 	return &player;
 }
@@ -222,6 +223,21 @@ void Game::send_state_message(Connection *connection_, Player *connection_player
 		send_player(player);
 	}
 
+	//send garden objects
+	connection.send(uint32_t(total_carrots_collected));
+	connection.send(uint32_t(total_tomatoes_collected));
+	connection.send(uint32_t(total_beets_collected));
+
+	// send one gift type byte to the connected player if any queued (type codes like 0=carrot,2=tomato).
+	uint8_t gift_type = 0xFF;
+	auto it = pending_gifts.find(connection_player ? connection_player->id : 0);
+	if (it != pending_gifts.end() && !it->second.empty()) {
+		gift_type = it->second.front();
+		it->second.pop_front();
+		if (it->second.empty()) pending_gifts.erase(it);
+	}
+	connection.send(gift_type);
+
 	//compute the message size and patch into the message header:
 	uint32_t size = uint32_t(connection.send_buffer.size() - mark);
 	connection.send_buffer[mark-3] = uint8_t(size);
@@ -272,10 +288,56 @@ bool Game::recv_state_message(Connection *connection_) {
 		}
 	}
 
-	if (at != size) throw std::runtime_error("Trailing data in state message.");
+	read(&this->total_carrots_collected);
+	read(&this->total_tomatoes_collected);
+	read(&this->total_beets_collected);
 
-	//delete message from buffer:
+	// read gift type byte for this client
+	uint8_t gift_type = 0xFF;
+	read(&gift_type);
+	if (gift_type != 0xFF) {
+		this->my_gifts.push_back(gift_type);
+	}
+
 	recv_buffer.erase(recv_buffer.begin(), recv_buffer.begin() + 4 + size);
 
+	return true;
+}
+
+bool Game::recv_gift_message(Connection *connection_) {
+	assert(connection_);
+	auto &connection = *connection_;
+	auto &recv_buffer = connection.recv_buffer;
+
+	if (recv_buffer.size() < 4) return false;
+	if (recv_buffer[0] != uint8_t(Message::S2C_Gift)) return false;
+	uint32_t size = (uint32_t(recv_buffer[3]) << 16)
+				  | (uint32_t(recv_buffer[2]) << 8)
+				  |  uint32_t(recv_buffer[1]);
+	if (recv_buffer.size() < 4 + size) return false;
+
+	uint8_t gift_byte = recv_buffer[4];
+	recv_buffer.erase(recv_buffer.begin(), recv_buffer.begin() + 4 + size);
+	this->my_gifts.push_back(gift_byte);
+	std::cout << "Received gift: " << int(gift_byte) << std::endl;
+	return true;
+}
+
+bool Game::recv_win_message(Connection *connection_) {
+	assert(connection_);
+	auto &connection = *connection_;
+	auto &recv_buffer = connection.recv_buffer;
+
+	// need at least header
+	if (recv_buffer.size() < 4) return false;
+	if (recv_buffer[0] != uint8_t(Message::S2C_Win)) return false;
+	uint32_t size = (uint32_t(recv_buffer[3]) << 16)
+				  | (uint32_t(recv_buffer[2]) << 8)
+				  |  uint32_t(recv_buffer[1]);
+	if (recv_buffer.size() < 4 + size) return false;
+
+	recv_buffer.erase(recv_buffer.begin(), recv_buffer.begin() + 4 + size);
+	this->win = true;
+	std::cout << "You won!" << std::endl;
 	return true;
 }

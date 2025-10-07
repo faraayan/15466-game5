@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <cassert>
+#include <vector>
 #include <unordered_map>
 
 #ifdef _WIN32
@@ -47,6 +48,7 @@ int main(int argc, char **argv) {
 	std::unordered_map< Connection *, Player * > connection_to_player;
 	//keep track of game state:
 	Game game;
+	bool win_broadcasted = false;
 
 	while (true) {
 		static auto next_tick = std::chrono::steady_clock::now() + std::chrono::duration< double >(Game::Tick);
@@ -80,8 +82,6 @@ int main(int argc, char **argv) {
 					remove_connection(c);
 
 				} else { assert(evt == Connection::OnRecv);
-					//got data from client:
-					//std::cout << "current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush(); //DEBUG
 
 					//look up in players list:
 					auto f = connection_to_player.find(c);
@@ -94,6 +94,149 @@ int main(int argc, char **argv) {
 						do {
 							handled_message = false;
 							if (player.controls.recv_controls_message(c)) handled_message = true;
+							if (c->recv_buffer.size() >= 4 && c->recv_buffer[0] == uint8_t(Message::C2S_Pickup)) {
+								uint32_t payload_size = (uint32_t(c->recv_buffer[3]) << 16)
+											  | (uint32_t(c->recv_buffer[2]) << 8)
+											  |  uint32_t(c->recv_buffer[1]);
+								if (c->recv_buffer.size() >= 4 + payload_size) {
+										uint8_t type_code = c->recv_buffer[4];
+										c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + 4 + payload_size);
+										handled_message = true;
+										if (type_code == 0) {
+											// carrot
+											game.total_carrots_collected += 1;
+											std::cout << player.name << " picked a carrot! Total carrots: " << game.total_carrots_collected << std::endl;
+											// check win condition
+											if (game.total_carrots_collected >= 12 && game.total_tomatoes_collected >= 10 && game.total_beets_collected >= 8) {
+												if (!win_broadcasted) {
+													for (auto &cp : connection_to_player) {
+														Connection *dest = cp.first;
+														dest->send(uint8_t(Message::S2C_Win));
+														uint32_t size = 0;
+														dest->send(uint8_t(size));
+														dest->send(uint8_t(size >> 8));
+														dest->send(uint8_t(size >> 16));
+													}
+													win_broadcasted = true;
+												}
+											}
+										} else if (type_code == 1) {
+											// carrot seed: gift to the next player (player.id + 1)
+											if (!game.players.empty()) {
+												std::vector< uint32_t > ids;
+												for (auto &p : game.players) ids.push_back(p.id);
+												if (!ids.empty()) {
+													// find current player's index
+													size_t idx = 0;
+													bool found = false;
+													for (size_t i = 0; i < ids.size(); ++i) {
+														if (ids[i] == player.id) { idx = i; found = true; break; }
+													}
+													size_t target_idx = found ? ((idx + 1) % ids.size()) : 0;
+													uint32_t target_id = ids[target_idx];
+
+													Connection *dest = nullptr;
+													for (auto &cp : connection_to_player) {
+														if (cp.second->id == target_id) { dest = cp.first; break; }
+													}
+															dest->send(Message::S2C_Gift);
+															uint32_t size = 1;
+															dest->send(uint8_t(size));
+															dest->send(uint8_t(size >> 8));
+															dest->send(uint8_t(size >> 16));
+															dest->send(uint8_t(0));
+															std::cout << player.name << " picked carrot seeds! Sent carrot gift to player " << target_id << std::endl;
+												}
+											}
+										} else if (type_code == 2) {
+											// tomato
+											game.total_tomatoes_collected += 1;
+											std::cout << player.name << " picked a tomato. Total tomatoes: " << game.total_tomatoes_collected << std::endl;
+											if (game.total_carrots_collected >= 2 && game.total_tomatoes_collected >= 2 && game.total_beets_collected >= 2) {
+												if (!win_broadcasted) {
+													for (auto &cp : connection_to_player) {
+														Connection *dest = cp.first;
+														dest->send(uint8_t(Message::S2C_Win));
+														uint32_t size = 0;
+														dest->send(uint8_t(size));
+														dest->send(uint8_t(size >> 8));
+														dest->send(uint8_t(size >> 16));
+													}
+													win_broadcasted = true;
+												}
+											}
+										} else if (type_code == 3) {
+											// tomato seed
+											if (!game.players.empty()) {
+												std::vector< uint32_t > ids;
+												for (auto &p : game.players) ids.push_back(p.id);
+												if (!ids.empty()) {
+													size_t idx = 0;
+													bool found = false;
+													for (size_t i = 0; i < ids.size(); ++i) {
+														if (ids[i] == player.id) { idx = i; found = true; break; }
+													}
+													size_t target_idx = found ? ((idx + 1) % ids.size()) : 0;
+													uint32_t target_id = ids[target_idx];
+													Connection *dest = nullptr;
+													for (auto &cp : connection_to_player) {
+														if (cp.second->id == target_id) { dest = cp.first; break; }
+													}
+													dest->send(Message::S2C_Gift);
+													uint32_t size = 1;
+													dest->send(uint8_t(size));
+													dest->send(uint8_t(size >> 8));
+													dest->send(uint8_t(size >> 16));
+													dest->send(uint8_t(2));
+													std::cout <<  player.name << " picked tomato seeds! Sent tomato gift to player id " << target_id << std::endl;
+												}
+											}
+										} else if (type_code == 4) {
+											// beet
+											game.total_beets_collected += 1;
+											std::cout << player.name << " picked a beet! Total beets: " << game.total_beets_collected << std::endl;
+											if (game.total_carrots_collected >= 2 && game.total_tomatoes_collected >= 2 && game.total_beets_collected >= 2) {
+												if (!win_broadcasted) {
+													for (auto &cp : connection_to_player) {
+														Connection *dest = cp.first;
+														dest->send(uint8_t(Message::S2C_Win));
+														uint32_t size = 0;
+														dest->send(uint8_t(size));
+														dest->send(uint8_t(size >> 8));
+														dest->send(uint8_t(size >> 16));
+													}
+													win_broadcasted = true;
+												}
+											}
+										} else if (type_code == 5) {
+											// beet seed
+											if (!game.players.empty()) {
+												std::vector< uint32_t > ids;
+												for (auto &p : game.players) ids.push_back(p.id);
+												if (!ids.empty()) {
+													size_t idx = 0;
+													bool found = false;
+													for (size_t i = 0; i < ids.size(); ++i) {
+														if (ids[i] == player.id) { idx = i; found = true; break; }
+													}
+													size_t target_idx = found ? ((idx + 1) % ids.size()) : 0;
+													uint32_t target_id = ids[target_idx];
+													Connection *dest = nullptr;
+													for (auto &cp : connection_to_player) {
+														if (cp.second->id == target_id) { dest = cp.first; break; }
+													}
+														dest->send(Message::S2C_Gift);
+														uint32_t size = 1;
+														dest->send(uint8_t(size));
+														dest->send(uint8_t(size >> 8));
+														dest->send(uint8_t(size >> 16));
+														dest->send(uint8_t(4));
+														std::cout << player.name << " picked beet seeds! Sent beet gift to player id " << target_id << std::endl;
+												}
+											}
+										}
+									}
+							}
 							//TODO: extend for more message types as needed
 						} while (handled_message);
 					} catch (std::exception const &e) {

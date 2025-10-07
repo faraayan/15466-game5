@@ -5,6 +5,9 @@
 #include <string>
 #include <list>
 #include <random>
+#include <cstdint>
+#include <deque>
+#include <unordered_map>
 
 struct Connection;
 
@@ -14,7 +17,10 @@ struct Connection;
 
 enum class Message : uint8_t {
 	C2S_Controls = 1, //Greg!
+	C2S_Pickup = 2,
 	S2C_State = 's',
+	S2C_Gift = 'g',
+	S2C_Win = 'w',
 	//...
 };
 
@@ -44,6 +50,7 @@ struct Player {
 
 	glm::vec3 color = glm::vec3(1.0f, 1.0f, 1.0f);
 	std::string name = "";
+	uint32_t id = 0;
 };
 
 struct Game {
@@ -79,9 +86,23 @@ struct Game {
 	//set game state from data in connection buffer
 	// (return true if data was read)
 	bool recv_state_message(Connection *connection);
+	bool recv_gift_message(Connection *connection);
+	bool recv_win_message(Connection *connection);
 
 	//used by server:
 	//send game state.
 	//  Will move "connection_player" to the front of the front of the sent list.
 	void send_state_message(Connection *connection, Player *connection_player = nullptr) const;
+
+	uint32_t total_carrots_collected = 0;
+	uint32_t total_tomatoes_collected = 0;
+	uint32_t total_beets_collected = 0;
+
+	// queue of gifts for server -> client
+	mutable std::unordered_map< uint32_t, std::deque<uint8_t> > pending_gifts;
+	
+	// received gifts on client
+	std::deque<uint8_t> my_gifts;
+
+	bool win = false;
 };
